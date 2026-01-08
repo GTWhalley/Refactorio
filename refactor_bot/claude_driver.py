@@ -111,6 +111,7 @@ class AgentRole(str, Enum):
     PLANNER = "planner"
     PATCHER = "patcher"
     CRITIC = "critic"
+    SECURITY = "security"
 
 
 @dataclass
@@ -530,6 +531,14 @@ class ClaudeDriver:
         return self.call_with_schema(
             prompt=context,
             role=AgentRole.CRITIC,
+        )
+
+    def call_security(self, context: str) -> ClaudeResponse:
+        """Call the security reviewer agent to scan for vulnerabilities."""
+        return self.call_with_schema(
+            prompt=context,
+            role=AgentRole.SECURITY,
+            max_turns=12,  # Security review may need more analysis time
         )
 
 

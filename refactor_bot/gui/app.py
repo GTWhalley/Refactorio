@@ -17,6 +17,7 @@ from refactor_bot.gui.views.configuration import ConfigurationView
 from refactor_bot.gui.views.plan_view import PlanView
 from refactor_bot.gui.views.progress_view import ProgressView
 from refactor_bot.gui.views.history_view import HistoryView
+from refactor_bot.gui.views.security_view import SecurityView
 
 
 class RefactorBotApp(ctk.CTk):
@@ -122,6 +123,12 @@ class RefactorBotApp(ctk.CTk):
 
         # History
         self._views[AppView.HISTORY] = HistoryView(
+            self.content_area,
+            on_navigate=self._navigate,
+        )
+
+        # Security
+        self._views[AppView.SECURITY] = SecurityView(
             self.content_area,
             on_navigate=self._navigate,
         )

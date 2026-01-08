@@ -157,6 +157,7 @@ class Sidebar(ctk.CTkFrame):
             ("Configuration", "⚙️", AppView.CONFIGURATION),
             ("Plan", "📋", AppView.PLAN),
             ("Progress", "▶️", AppView.PROGRESS),
+            ("Security", "🔒", AppView.SECURITY),
             ("History", "📜", AppView.HISTORY),
         ]
 

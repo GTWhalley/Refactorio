@@ -33,6 +33,7 @@ from refactor_bot.context_pack import ContextPackBuilder
 from refactor_bot.patch_apply import apply_patch
 from refactor_bot.ledger import TaskLedger, BatchStatus
 from refactor_bot.report import ReportGenerator
+from refactor_bot.security import SecurityReviewer, format_security_report
 
 app = typer.Typer(
     name="refactorio",
@@ -117,6 +118,16 @@ def run(
         None,
         "--max-batches",
         help="Override maximum number of batches",
+    ),
+    skip_security: bool = typer.Option(
+        False,
+        "--skip-security",
+        help="Skip security review after refactoring",
+    ),
+    block_on_high: bool = typer.Option(
+        True,
+        "--block-on-high/--no-block-on-high",
+        help="Block merge if high severity security issues found",
     ),
 ):
     """
@@ -477,10 +488,79 @@ def run(
     report_path = worktree_path / ".refactor-bot" / "report.json"
     report.save(report_path)
 
+    # Security review
+    security_result = None
+    if not skip_security and completed_batches:
+        console.print()
+        console.print("[bold]Security Review:[/] Scanning changes for vulnerabilities...")
+
+        # Collect all touched files from completed batches
+        all_touched_files = []
+        for batch in completed_batches:
+            if hasattr(batch, 'touched_files'):
+                all_touched_files.extend(batch.touched_files)
+
+        # Also get from ledger
+        for entry in ledger.entries:
+            if entry.status == BatchStatus.SUCCESS and entry.files_touched:
+                all_touched_files.extend(entry.files_touched)
+
+        # Deduplicate
+        all_touched_files = list(set(all_touched_files))
+
+        if all_touched_files:
+            with console.status("Running security analysis..."):
+                security_reviewer = SecurityReviewer(claude_driver, worktree_path)
+                security_result = security_reviewer.review_changes(
+                    changed_files=all_touched_files,
+                    context_summary=f"Automated refactoring of {len(completed_batches)} batches",
+                )
+
+            if security_result.success:
+                # Display summary
+                if security_result.summary.high > 0:
+                    console.print(f"[bold red]High severity issues: {security_result.summary.high}[/]")
+                if security_result.summary.medium > 0:
+                    console.print(f"[bold yellow]Medium severity issues: {security_result.summary.medium}[/]")
+                if security_result.summary.low > 0:
+                    console.print(f"[dim]Low severity issues: {security_result.summary.low}[/]")
+                if security_result.summary.total == 0:
+                    print_success("No security vulnerabilities found")
+                else:
+                    console.print(f"\nOverall risk: [bold]{security_result.overall_risk.value.upper()}[/]")
+
+                # Save security report
+                security_path = worktree_path / ".refactor-bot" / "security_review.json"
+                security_result.save(security_path)
+                print_info(f"Security report saved to: {security_path}")
+
+                # Show detailed findings if any high/medium
+                if security_result.summary.high > 0 or security_result.summary.medium > 0:
+                    console.print()
+                    console.print(format_security_report(security_result))
+            else:
+                print_warning(f"Security review failed: {security_result.error_message}")
+        else:
+            print_info("No files to review for security")
+
     # Final acceptance
     if report.success and completed_batches:
         console.print()
-        if Confirm.ask("Accept changes and merge to main repository?", default=True):
+
+        # Check for blocking security issues
+        merge_blocked = False
+        if security_result and security_result.has_blocking_issues(block_on_high):
+            console.print()
+            print_warning("High severity security issues found!")
+            print_error("Merge is blocked due to security concerns.")
+            print_info("Review the security report and fix issues before merging.")
+            print_info("Use --no-block-on-high to override (not recommended).")
+            merge_blocked = True
+
+        if merge_blocked:
+            print_info(f"Worktree preserved at: {worktree_path}")
+            print_info(f"Backup available at: {backup_info.backup_path if backup_info else 'N/A'}")
+        elif Confirm.ask("Accept changes and merge to main repository?", default=True):
             try:
                 repo_manager.merge_to_main()
                 print_success("Changes merged successfully!")
@@ -624,6 +704,105 @@ def verify(
         print_success(f"All {len(result.commands)} checks passed")
     else:
         print_error(f"{len(result.failed_commands)} checks failed")
+        raise typer.Exit(1)
+
+
+@app.command(name="security-scan")
+def security_scan(
+    repo_path: Path = typer.Argument(
+        ...,
+        help="Path to the repository to scan",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        resolve_path=True,
+    ),
+    files: Optional[list[str]] = typer.Option(
+        None,
+        "--file", "-f",
+        help="Specific files to scan (can be repeated)",
+    ),
+    output: Optional[Path] = typer.Option(
+        None,
+        "--output", "-o",
+        help="Path to save the security report (JSON)",
+    ),
+):
+    """
+    Run a standalone security scan on a repository or specific files.
+
+    Scans code for common vulnerabilities like injection, auth issues,
+    data exposure, and more.
+    """
+    print_header()
+
+    console.print(f"Scanning: [cyan]{repo_path}[/]")
+    console.print()
+
+    # Check Claude Code
+    ready, message = check_claude_ready()
+    if not ready:
+        print_error(message)
+        raise typer.Exit(1)
+
+    config = Config.load_or_create(repo_path)
+
+    # Determine files to scan
+    if files:
+        scan_files = files
+    else:
+        # Scan all non-excluded files
+        from refactor_bot.indexer import SymbolExtractor
+        extractor = SymbolExtractor(repo_path, config.scope_excludes)
+        extractor.index_files()
+        scan_files = [str(f.relative_to(repo_path)) for f in extractor.files]
+
+    if not scan_files:
+        print_info("No files to scan")
+        raise typer.Exit(0)
+
+    console.print(f"Files to scan: {len(scan_files)}")
+
+    # Initialize Claude driver
+    prompts_dir = Path(__file__).parent.parent / "prompts"
+    schemas_dir = Path(__file__).parent.parent / "schemas"
+
+    claude_driver = ClaudeDriver(
+        config=config.claude,
+        prompts_dir=prompts_dir,
+        schemas_dir=schemas_dir,
+        working_dir=repo_path,
+    )
+
+    # Run security scan
+    with console.status("Running security analysis..."):
+        reviewer = SecurityReviewer(claude_driver, repo_path)
+        result = reviewer.review_changes(scan_files)
+
+    if not result.success:
+        print_error(f"Security scan failed: {result.error_message}")
+        raise typer.Exit(1)
+
+    # Display results
+    console.print()
+    console.print(format_security_report(result))
+
+    # Summary with colors
+    console.print()
+    if result.summary.high > 0:
+        print_error(f"Found {result.summary.high} high severity issues")
+    if result.summary.medium > 0:
+        print_warning(f"Found {result.summary.medium} medium severity issues")
+    if result.summary.total == 0:
+        print_success("No security vulnerabilities found")
+
+    # Save report if requested
+    if output:
+        result.save(output)
+        print_success(f"Report saved to: {output}")
+
+    # Exit with error code if high severity issues
+    if result.summary.high > 0:
         raise typer.Exit(1)
 
 

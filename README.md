@@ -13,6 +13,7 @@ Refactorio analyzes your codebase, generates a safe refactoring plan, and execut
 - **Batch Processing**: Breaks large refactors into safe, verifiable chunks with risk scoring
 - **Real-time Progress**: GUI shows live progress with stage indicators and elapsed time
 - **Rollback Support**: One-click rollback to any previous state
+- **Security Scanning**: Post-refactor vulnerability analysis for injection, auth issues, data exposure, and more
 
 ## Supported Languages
 
@@ -70,6 +71,12 @@ refactorio rollback /path/to/repo --backup-id <id>
 
 # List available backups
 refactorio list-backups /path/to/repo
+
+# Run a security scan
+refactorio security-scan /path/to/repo
+
+# Security scan on specific files
+refactorio security-scan /path/to/repo -f src/api.py -f src/auth.py
 ```
 
 ## How It Works
@@ -80,7 +87,8 @@ refactorio list-backups /path/to/repo
 4. **Execute**: Processes batches one at a time, calling Claude to generate patches
 5. **Verify**: Runs your test suite and linters after each batch
 6. **Commit**: Creates checkpoint commits for successful batches
-7. **Merge**: Once complete, changes can be merged back to your main branch
+7. **Security**: Scans all changed files for potential vulnerabilities
+8. **Merge**: Once complete and security-approved, changes can be merged back to your main branch
 
 ## Configuration
 
@@ -119,6 +127,7 @@ claude:
 - **Configuration**: Set verifier commands and batch limits
 - **Plan**: View and edit the generated refactoring plan
 - **Progress**: Real-time visualization during refactoring
+- **Security**: Run vulnerability scans and view findings
 - **History**: Browse past runs and rollback if needed
 - **Settings**: Configure Claude Code CLI path and connection
 
@@ -136,6 +145,7 @@ refactor_bot/
 ├── backup.py           # Backup management
 ├── repo_manager.py     # Git worktree management
 ├── ledger.py           # Task tracking
+├── security.py         # Security vulnerability scanning
 ├── indexer/
 │   ├── symbols.py      # Symbol extraction
 │   └── deps.py         # Dependency analysis

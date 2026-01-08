@@ -1,0 +1,100 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SecurityReviewResponse",
+  "description": "Response from the Security Reviewer Agent containing vulnerability findings",
+  "type": "object",
+  "properties": {
+    "findings": {
+      "type": "array",
+      "description": "List of security findings",
+      "items": {
+        "type": "object",
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["high", "medium", "low", "info"],
+            "description": "Severity level of the finding"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "injection",
+              "auth",
+              "data_exposure",
+              "crypto",
+              "input_validation",
+              "race_condition",
+              "dependency",
+              "configuration",
+              "other"
+            ],
+            "description": "Category of the vulnerability"
+          },
+          "file": {
+            "type": "string",
+            "description": "File path where the vulnerability was found"
+          },
+          "line": {
+            "type": "integer",
+            "description": "Line number of the vulnerability (0 if not applicable)"
+          },
+          "title": {
+            "type": "string",
+            "description": "Short title describing the vulnerability"
+          },
+          "description": {
+            "type": "string",
+            "description": "Detailed description of the vulnerability"
+          },
+          "recommendation": {
+            "type": "string",
+            "description": "How to fix the vulnerability"
+          },
+          "cwe": {
+            "type": "string",
+            "description": "CWE identifier if applicable (e.g., CWE-89)"
+          }
+        },
+        "required": ["severity", "category", "file", "line", "title", "description", "recommendation"]
+      }
+    },
+    "summary": {
+      "type": "object",
+      "description": "Summary counts by severity",
+      "properties": {
+        "high": {
+          "type": "integer",
+          "description": "Count of high severity findings"
+        },
+        "medium": {
+          "type": "integer",
+          "description": "Count of medium severity findings"
+        },
+        "low": {
+          "type": "integer",
+          "description": "Count of low severity findings"
+        },
+        "info": {
+          "type": "integer",
+          "description": "Count of informational findings"
+        },
+        "total": {
+          "type": "integer",
+          "description": "Total count of all findings"
+        }
+      },
+      "required": ["high", "medium", "low", "info", "total"]
+    },
+    "overall_risk": {
+      "type": "string",
+      "enum": ["critical", "high", "medium", "low", "none"],
+      "description": "Overall risk assessment"
+    },
+    "notes": {
+      "type": "string",
+      "description": "General observations or notes about the security review"
+    }
+  },
+  "required": ["findings", "summary", "overall_risk"],
+  "additionalProperties": false
+}

@@ -26,6 +26,7 @@ class AppView(str, Enum):
     PLAN = "plan"
     PROGRESS = "progress"
     HISTORY = "history"
+    SECURITY = "security"
 
 
 class ConnectionStatus(str, Enum):
