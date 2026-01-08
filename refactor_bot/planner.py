@@ -282,6 +282,9 @@ class Planner:
                     notes="Safe to modify - no other files depend on these",
                 ))
 
+        # Split large batches based on file count
+        batches = self._split_large_batches(batches)
+
         # Sort by risk score (lowest first)
         batches.sort(key=lambda b: b.risk_score)
 
@@ -296,6 +299,71 @@ class Planner:
             created_at=datetime.now().isoformat(),
             repo_path=str(self.repo_path),
         )
+
+    def _split_large_batches(self, batches: list[Batch]) -> list[Batch]:
+        """Split batches that cover too many files into smaller sub-batches.
+
+        This prevents timeout issues with large batches and provides
+        better progress visibility.
+        """
+        max_files = self.config.max_files_per_batch
+        result: list[Batch] = []
+
+        for batch in batches:
+            # Get actual files matching the batch scope
+            matching_files = self._get_files_for_scope(batch.scope_globs)
+
+            if len(matching_files) <= max_files:
+                # Batch is small enough, keep as-is
+                result.append(batch)
+                continue
+
+            # Split into sub-batches
+            num_sub_batches = (len(matching_files) + max_files - 1) // max_files
+
+            for i in range(num_sub_batches):
+                start_idx = i * max_files
+                end_idx = min((i + 1) * max_files, len(matching_files))
+                sub_files = matching_files[start_idx:end_idx]
+
+                sub_batch = Batch(
+                    id=self._next_batch_id(),
+                    goal=f"{batch.goal} (part {i + 1}/{num_sub_batches})",
+                    scope_globs=sub_files,  # Use explicit file paths instead of globs
+                    allowed_operations=batch.allowed_operations,
+                    diff_budget_loc=batch.diff_budget_loc,
+                    risk_score=batch.risk_score,
+                    verifier_level=batch.verifier_level,
+                    notes=f"{batch.notes} | Files {start_idx + 1}-{end_idx} of {len(matching_files)}",
+                    dependencies=batch.dependencies,
+                )
+                result.append(sub_batch)
+
+        return result
+
+    def _get_files_for_scope(self, scope_globs: list[str]) -> list[str]:
+        """Get all files matching the given scope globs."""
+        import fnmatch
+
+        if not self.symbols:
+            return []
+
+        matching: list[str] = []
+
+        for rel_path in self.symbols.files.keys():
+            for pattern in scope_globs:
+                # Handle both glob patterns and explicit paths
+                if pattern == rel_path:
+                    matching.append(rel_path)
+                    break
+                elif fnmatch.fnmatch(rel_path, pattern.replace("**", "*")):
+                    matching.append(rel_path)
+                    break
+                elif fnmatch.fnmatch(rel_path, pattern):
+                    matching.append(rel_path)
+                    break
+
+        return sorted(matching)
 
     def _lang_extension(self, lang: str) -> str:
         """Get file extension for a language."""

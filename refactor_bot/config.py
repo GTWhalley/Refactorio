@@ -55,6 +55,12 @@ class Config(BaseModel):
         le=500,
         description="Maximum number of batches to generate",
     )
+    max_files_per_batch: int = Field(
+        default=15,
+        ge=1,
+        le=100,
+        description="Maximum files per batch (large batches will be split)",
+    )
     retry_per_batch: int = Field(
         default=2,
         ge=0,
