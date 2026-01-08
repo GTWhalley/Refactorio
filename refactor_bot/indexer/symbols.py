@@ -131,6 +131,18 @@ SYMBOL_PATTERNS: dict[str, list[tuple[SymbolType, str]]] = {
         (SymbolType.ENUM, r"^(?:public\s+)?enum\s+(\w+)"),
         (SymbolType.METHOD, r"^\s+(?:public|private|protected)?\s*(?:static\s+)?(?:\w+\s+)+(\w+)\s*\("),
     ],
+    # Godot GDScript
+    "gdscript": [
+        (SymbolType.CLASS, r"^class_name\s+(\w+)"),
+        (SymbolType.CLASS, r"^class\s+(\w+)"),
+        (SymbolType.FUNCTION, r"^func\s+(\w+)\s*\("),
+        (SymbolType.METHOD, r"^\t+func\s+(\w+)\s*\("),
+        (SymbolType.VARIABLE, r"^(?:@export\s+)?var\s+(\w+)"),
+        (SymbolType.VARIABLE, r"^(?:@onready\s+)?var\s+(\w+)"),
+        (SymbolType.CONSTANT, r"^const\s+(\w+)\s*="),
+        (SymbolType.CONSTANT, r"^enum\s+(\w+)\s*\{"),
+        (SymbolType.FUNCTION, r"^signal\s+(\w+)"),
+    ],
 }
 
 # File extension to language mapping
@@ -154,6 +166,11 @@ EXTENSION_MAP: dict[str, str] = {
     ".cpp": "cpp",
     ".hpp": "cpp",
     ".cs": "csharp",
+    # Godot
+    ".gd": "gdscript",
+    ".tscn": "godot_scene",
+    ".tres": "godot_resource",
+    ".gdshader": "gdshader",
 }
 
 
@@ -279,7 +296,12 @@ class SymbolExtractor:
 
             language = self._detect_language(file_path)
             if not language:
-                continue
+                # Still index files without known language if they're text files
+                # This helps with Godot scene files, configs, etc.
+                if file_path.suffix.lower() in ['.tscn', '.tres', '.cfg', '.import', '.gdshader']:
+                    language = file_path.suffix.lower().lstrip('.')
+                else:
+                    continue
 
             try:
                 file_info = FileInfo(

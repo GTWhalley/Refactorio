@@ -166,6 +166,17 @@ class SettingsView(ctk.CTkFrame):
         btn_frame = ctk.CTkFrame(claude_content, fg_color="transparent")
         btn_frame.pack(fill="x")
 
+        self.login_btn = ctk.CTkButton(
+            btn_frame,
+            text="Login to Claude",
+            width=140,
+            height=40,
+            font=(theme.fonts.family, theme.fonts.size_md),
+            **theme.get_button_style("primary"),
+            command=self._launch_claude_login,
+        )
+        self.login_btn.pack(side="left", padx=(0, 8))
+
         self.test_btn = ctk.CTkButton(
             btn_frame,
             text="Test Connection",
@@ -183,7 +194,7 @@ class SettingsView(ctk.CTkFrame):
             width=140,
             height=40,
             font=(theme.fonts.family, theme.fonts.size_md),
-            **theme.get_button_style("primary"),
+            **theme.get_button_style("outline"),
             command=self._save_settings,
         )
         self.save_btn.pack(side="left")
@@ -455,3 +466,67 @@ class SettingsView(ctk.CTkFrame):
         # Show confirmation
         self.save_btn.configure(text="✓ Saved!")
         self.after(2000, lambda: self.save_btn.configure(text="Save Settings"))
+
+    def _launch_claude_login(self) -> None:
+        """Launch Claude in Terminal for interactive login."""
+        import platform
+
+        # Get the Claude binary path
+        path = self.path_entry.get().strip()
+        if not path:
+            path = app_state.claude_settings.auto_detected_path
+        if not path:
+            # Show error
+            self.status_label.configure(
+                text="No Claude binary found - please specify path first",
+                text_color=theme.colors.error,
+            )
+            return
+
+        # Show launching message
+        self.login_btn.configure(text="Launching...", state="disabled")
+
+        try:
+            if platform.system() == "Darwin":  # macOS
+                # Open Terminal and run claude for interactive login
+                # The user can then type /login in the Claude CLI
+                apple_script = f'''
+                tell application "Terminal"
+                    activate
+                    do script "echo 'Starting Claude Code CLI for login...'; echo 'Type /login once Claude starts, then follow the prompts.'; echo ''; \\"{path}\\""
+                end tell
+                '''
+                subprocess.Popen(["osascript", "-e", apple_script])
+
+            elif platform.system() == "Linux":
+                # Try common terminal emulators
+                terminals = ["gnome-terminal", "konsole", "xterm"]
+                for term in terminals:
+                    try:
+                        if term == "gnome-terminal":
+                            subprocess.Popen([term, "--", path])
+                        else:
+                            subprocess.Popen([term, "-e", path])
+                        break
+                    except FileNotFoundError:
+                        continue
+
+            elif platform.system() == "Windows":
+                # Open in new cmd window
+                subprocess.Popen(["cmd", "/c", "start", "cmd", "/k", path])
+
+            # Update button after launch
+            self.after(1000, lambda: self.login_btn.configure(text="Login to Claude", state="normal"))
+
+            # Show instructions
+            self.status_label.configure(
+                text="Terminal opened - type /login in Claude CLI",
+                text_color=theme.colors.warning,
+            )
+
+        except Exception as e:
+            self.login_btn.configure(text="Login to Claude", state="normal")
+            self.status_label.configure(
+                text=f"Failed to launch: {e}",
+                text_color=theme.colors.error,
+            )

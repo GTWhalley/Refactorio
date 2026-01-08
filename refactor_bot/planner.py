@@ -206,9 +206,15 @@ class Planner:
         files_by_lang = self._get_files_by_language()
 
         # 1. Formatting pass (if enabled)
+        # Only format actual code files, not config/data/resource files
+        formattable_langs = {
+            "python", "javascript", "typescript", "rust", "go", "java",
+            "gdscript", "c", "cpp", "csharp", "swift", "kotlin", "ruby",
+            "php", "lua", "shell", "bash",
+        }
         if self.config.allow_formatting_only:
             for lang, files in files_by_lang.items():
-                if files:
+                if files and lang in formattable_langs:
                     batches.append(Batch(
                         id=self._next_batch_id(),
                         goal=f"Format all {lang} files",
@@ -300,6 +306,29 @@ class Planner:
             "rust": "rs",
             "go": "go",
             "java": "java",
+            "gdscript": "gd",
+            "godot_scene": "tscn",
+            "godot_resource": "tres",
+            "gdshader": "gdshader",
+            "cfg": "cfg",
+            "import": "import",
+            "json": "json",
+            "yaml": "yaml",
+            "toml": "toml",
+            "md": "md",
+            "txt": "txt",
+            "c": "c",
+            "cpp": "cpp",
+            "h": "h",
+            "hpp": "hpp",
+            "csharp": "cs",
+            "swift": "swift",
+            "kotlin": "kt",
+            "ruby": "rb",
+            "php": "php",
+            "lua": "lua",
+            "shell": "sh",
+            "bash": "bash",
         }
         return extensions.get(lang, "*")
 

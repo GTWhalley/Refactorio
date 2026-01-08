@@ -20,8 +20,12 @@ def generate_run_id() -> str:
 
 
 def generate_session_id() -> str:
-    """Generate a unique session ID for Claude calls."""
-    return uuid.uuid4().hex
+    """Generate a unique session ID for Claude calls.
+
+    Returns a proper UUID string with dashes (e.g., '550e8400-e29b-41d4-a716-446655440000')
+    which is required by Claude Code CLI.
+    """
+    return str(uuid.uuid4())
 
 
 def file_hash(path: Path) -> str:

@@ -1,5 +1,5 @@
 """
-Claude Code CLI driver for refactor-bot.
+Claude Code CLI driver for Refactorio.
 
 Handles all interactions with the Claude Code CLI, including:
 - Binary discovery and authentication verification
@@ -12,13 +12,48 @@ from __future__ import annotations
 import json
 import subprocess
 import shutil
+import time
+import threading
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Callable
 
 from refactor_bot.config import ClaudeConfig
 from refactor_bot.util import generate_session_id
+
+# Optional debug logger - set by GUI if available
+_debug_logger: Optional[Callable[[str, str], None]] = None
+
+# Optional activity callback - called periodically during long operations
+_activity_callback: Optional[Callable[[str, float], None]] = None
+
+
+def set_debug_logger(logger: Callable[[str, str], None]) -> None:
+    """Set the debug logger function."""
+    global _debug_logger
+    _debug_logger = logger
+
+
+def set_activity_callback(callback: Callable[[str, float], None]) -> None:
+    """Set the activity callback function.
+
+    Callback receives (activity_message, elapsed_seconds).
+    """
+    global _activity_callback
+    _activity_callback = callback
+
+
+def _debug(message: str, level: str = "debug") -> None:
+    """Log a debug message if logger is available."""
+    if _debug_logger:
+        _debug_logger(message, level)
+
+
+def _notify_activity(message: str, elapsed: float) -> None:
+    """Notify about ongoing activity."""
+    if _activity_callback:
+        _activity_callback(message, elapsed)
 
 
 class ClaudeError(Exception):
@@ -284,26 +319,80 @@ class ClaudeDriver:
             "--session-id", session_id,
         ]
 
+        # Log the command (without the full prompt for brevity)
+        cmd_display = [
+            self.binary_path, "-p", f"<{len(prompt)} chars>",
+            "--output-format", "json", "--json-schema", "<schema>",
+            "--system-prompt-file", str(system_prompt_file),
+            "--allowedTools", self.config.allowed_tools,
+            "--tools", self.config.tools,
+            "--max-turns", str(max_turns),
+            "--session-id", session_id,
+        ]
+        _debug(f"Executing: {' '.join(cmd_display)}", "info")
+        _debug(f"Working directory: {self.working_dir}", "debug")
+
         try:
-            result = subprocess.run(
+            _debug("Starting Claude process...", "info")
+            start_time = time.time()
+
+            # Use Popen for streaming output and activity monitoring
+            process = subprocess.Popen(
                 cmd,
-                capture_output=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
                 text=True,
-                timeout=300,  # 5 minute timeout for complex operations
                 cwd=self.working_dir,
             )
 
-            if result.returncode != 0:
+            # Activity monitor thread
+            stop_monitor = threading.Event()
+            stdout_chunks = []
+            stderr_chunks = []
+
+            def monitor_activity():
+                """Thread to update elapsed time during Claude execution."""
+                while not stop_monitor.is_set():
+                    elapsed = time.time() - start_time
+                    _notify_activity("Waiting for Claude response...", elapsed)
+                    stop_monitor.wait(1.0)  # Update every second
+
+            monitor_thread = threading.Thread(target=monitor_activity, daemon=True)
+            monitor_thread.start()
+
+            # Read output with timeout (10 minutes for large batches)
+            try:
+                stdout, stderr = process.communicate(timeout=600)
+                stdout_chunks.append(stdout)
+                stderr_chunks.append(stderr)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+                stop_monitor.set()
+                return ClaudeResponse.from_error("Claude call timed out after 10 minutes")
+            finally:
+                stop_monitor.set()
+                monitor_thread.join(timeout=1.0)
+
+            elapsed = time.time() - start_time
+            _debug(f"Claude process completed in {elapsed:.1f}s with return code: {process.returncode}", "info")
+            _notify_activity("Claude finished", elapsed)
+
+            result_stdout = "".join(stdout_chunks)
+            result_stderr = "".join(stderr_chunks)
+
+            if process.returncode != 0:
+                _debug(f"Claude stderr: {result_stderr[:500]}", "error")
                 return ClaudeResponse.from_error(
-                    f"Claude exited with code {result.returncode}: {result.stderr}"
+                    f"Claude exited with code {process.returncode}: {result_stderr}"
                 )
 
             # Parse JSON output
             try:
-                output = json.loads(result.stdout)
+                output = json.loads(result_stdout)
             except json.JSONDecodeError:
                 return ClaudeResponse.from_error(
-                    f"Failed to parse Claude output as JSON: {result.stdout[:500]}"
+                    f"Failed to parse Claude output as JSON: {result_stdout[:500]}"
                 )
 
             # Extract structured output
@@ -326,13 +415,13 @@ class ClaudeDriver:
 
             return ClaudeResponse(
                 success=True,
-                raw_output=result.stdout,
+                raw_output=result_stdout,
                 structured_output=structured_output,
                 session_id=session_id,
             )
 
         except subprocess.TimeoutExpired:
-            return ClaudeResponse.from_error("Claude call timed out after 5 minutes")
+            return ClaudeResponse.from_error("Claude call timed out after 10 minutes")
         except Exception as e:
             return ClaudeResponse.from_error(str(e))
 

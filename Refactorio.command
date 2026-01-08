@@ -3,4 +3,4 @@
 # Double-click this file to launch the GUI
 
 cd "$(dirname "$0")"
-python -m refactor_bot.cli gui
+/Library/Frameworks/Python.framework/Versions/3.12/bin/python3 -m refactor_bot.cli gui

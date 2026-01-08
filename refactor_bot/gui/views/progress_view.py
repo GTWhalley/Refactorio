@@ -12,6 +12,8 @@ from refactor_bot.gui.state import AppView, app_state
 from refactor_bot.gui.components.progress_bar import AnimatedProgressBar, BatchProgressIndicator
 from refactor_bot.gui.components.log_viewer import LogViewer
 from refactor_bot.gui.components.diff_viewer import DiffViewer
+from refactor_bot.gui.components.debug_console import debug_log, debug_error
+from refactor_bot.gui.components.activity_indicator import BatchActivityDisplay
 
 
 class ProgressView(ctk.CTkFrame):
@@ -141,6 +143,10 @@ class ProgressView(ctk.CTkFrame):
         self.stat_time = self._create_inline_stat(stats_frame, "0:00", "Elapsed")
         self.stat_time.pack(side="left")
 
+        # Activity indicator (shows during Claude processing)
+        self.activity_display = BatchActivityDisplay(container)
+        # Initially hidden, will show during batch processing
+
         # Main content - two columns
         content = ctk.CTkFrame(container, fg_color="transparent")
         content.pack(fill="both", expand=True)
@@ -266,11 +272,14 @@ class ProgressView(ctk.CTkFrame):
 
         if not repo.path or not plan:
             self.after(0, lambda: self.log_viewer.log_error("No repository or plan"))
+            debug_log("Cannot start: No repository or plan", "error")
             return
 
         self.after(0, lambda: self.log_viewer.log_info("Starting refactoring..."))
+        debug_log(f"Starting refactoring on {repo.path} with {len(plan.batches)} batches", "info")
 
         config = repo.config or Config.load_or_create(repo.path)
+        debug_log(f"Config loaded. Claude binary: {config.claude.binary}", "debug")
 
         # Initialize
         repo_manager = RepoManager(repo.path)
@@ -301,11 +310,25 @@ class ProgressView(ctk.CTkFrame):
             self.after(0, lambda: self.log_viewer.log_success("Baseline verification passed"))
 
             # Setup Claude driver
-            prompts_dir = Path(__file__).parent.parent.parent / "prompts"
-            schemas_dir = Path(__file__).parent.parent.parent / "schemas"
+            # Path: views/progress_view.py -> gui -> refactor_bot -> project root
+            project_root = Path(__file__).parent.parent.parent.parent
+            prompts_dir = project_root / "prompts"
+            schemas_dir = project_root / "schemas"
+            debug_log(f"Prompts dir: {prompts_dir}", "debug")
+            debug_log(f"Schemas dir: {schemas_dir}", "debug")
 
             claude_config = config.claude
             claude_config.binary = app_state.get_claude_binary()
+
+            # Wire up debug logging and activity callback to Claude driver
+            from refactor_bot.claude_driver import set_debug_logger, set_activity_callback
+            set_debug_logger(debug_log)
+
+            # Activity callback updates the UI during long Claude calls
+            def on_activity(message: str, elapsed: float):
+                self.after(0, lambda: self.activity_display.update_activity(message, elapsed))
+
+            set_activity_callback(on_activity)
 
             claude_driver = ClaudeDriver(
                 config=claude_config,
@@ -313,6 +336,7 @@ class ProgressView(ctk.CTkFrame):
                 schemas_dir=schemas_dir,
                 working_dir=worktree_path,
             )
+            debug_log(f"Claude driver initialized. Binary: {claude_config.binary}", "success")
 
             # Index
             self.after(0, lambda: self.log_viewer.log_info("Indexing codebase..."))
@@ -352,19 +376,37 @@ class ProgressView(ctk.CTkFrame):
                 self.after(0, lambda i=i, b=batch: self._update_progress(i, total, b))
                 self.after(0, lambda b=batch: self.log_viewer.log_info(f"Processing {b.id}: {b.goal}"))
 
+                # Show activity display for this batch
+                self.after(0, lambda b=batch: self.activity_display.start_batch(b.id, b.goal))
+
                 batch_start = time.time()
 
-                # Build context
+                # Build context - Stage 0
+                self.after(0, lambda: self.activity_display.set_stage(0))
+                debug_log(f"Building context for batch {batch.id}...", "debug")
                 context = context_builder.build_patcher_context(batch)
+                debug_log(f"Context built: {len(context)} chars", "debug")
 
-                # Call Claude
-                self.after(0, lambda: self.log_viewer.log_info("Calling Claude..."))
+                # Call Claude - Stage 1
+                self.after(0, lambda: self.activity_display.set_stage(1))
+                self.after(0, lambda: self.log_viewer.log_info("Calling Claude Code CLI..."))
+                claude_binary = app_state.get_claude_binary()
+                debug_log(f"Invoking Claude: {claude_binary}", "info")
+                debug_log(f"  Batch goal: {batch.goal}", "debug")
+                debug_log(f"  Scope: {batch.scope_globs}", "debug")
+
                 response = claude_driver.call_patcher(context)
+
+                debug_log(f"Claude response received. Success: {response.success}", "info")
+                if response.raw_output:
+                    debug_log(f"Raw output length: {len(response.raw_output)} chars", "debug")
 
                 if not response.success:
                     failed += 1
+                    debug_log(f"Claude error: {response.error_message}", "error")
                     self.after(0, lambda e=response.error_message: self.log_viewer.log_error(f"Claude error: {e}"))
                     self.after(0, lambda i=i: self.batch_indicators.set_status(i, "failed"))
+                    self.after(0, lambda: self.activity_display.stop_batch())
                     continue
 
                 output = response.structured_output
@@ -373,15 +415,20 @@ class ProgressView(ctk.CTkFrame):
                 if status == "noop":
                     self.after(0, lambda: self.log_viewer.log_info("No changes needed"))
                     self.after(0, lambda i=i: self.batch_indicators.set_status(i, "skipped"))
+                    self.after(0, lambda: self.activity_display.stop_batch())
+                    self.after(0, lambda i=i, b=batch: self._update_progress(i, total, b, completed=True))
                     completed += 1
                     continue
 
                 if status == "blocked":
                     self.after(0, lambda r=output.get("rationale", ""): self.log_viewer.log_warning(f"Blocked: {r}"))
                     self.after(0, lambda i=i: self.batch_indicators.set_status(i, "skipped"))
+                    self.after(0, lambda: self.activity_display.stop_batch())
+                    self.after(0, lambda i=i, b=batch: self._update_progress(i, total, b, completed=True))
                     continue
 
-                # Apply patch
+                # Apply patch - Stage 2
+                self.after(0, lambda: self.activity_display.set_stage(2))
                 patch_diff = output.get("patch_unified_diff", "")
                 if patch_diff:
                     self.after(0, lambda d=patch_diff: self.diff_viewer.set_diff(d))
@@ -397,9 +444,11 @@ class ProgressView(ctk.CTkFrame):
                         failed += 1
                         self.after(0, lambda e=result.error_message: self.log_viewer.log_error(f"Patch failed: {e}"))
                         self.after(0, lambda i=i: self.batch_indicators.set_status(i, "failed"))
+                        self.after(0, lambda: self.activity_display.stop_batch())
                         continue
 
-                    # Verify
+                    # Verify - Stage 3
+                    self.after(0, lambda: self.activity_display.set_stage(3))
                     self.after(0, lambda: self.log_viewer.log_info("Running verification..."))
                     verification = verifier.run_fast()
 
@@ -408,6 +457,7 @@ class ProgressView(ctk.CTkFrame):
                         self.after(0, lambda: self.log_viewer.log_error("Verification failed"))
                         repo_manager.revert_to_baseline()
                         self.after(0, lambda i=i: self.batch_indicators.set_status(i, "failed"))
+                        self.after(0, lambda: self.activity_display.stop_batch())
                         continue
 
                     # Checkpoint
@@ -415,6 +465,8 @@ class ProgressView(ctk.CTkFrame):
                     completed += 1
                     self.after(0, lambda: self.log_viewer.log_success("Batch completed"))
                     self.after(0, lambda i=i: self.batch_indicators.set_status(i, "completed"))
+                    self.after(0, lambda: self.activity_display.stop_batch())
+                    self.after(0, lambda i=i, b=batch: self._update_progress(i, total, b, completed=True))
 
                 # Update stats
                 self.after(0, lambda c=completed, f=failed, r=total-i-1: self._update_stats(c, f, r))
@@ -425,11 +477,25 @@ class ProgressView(ctk.CTkFrame):
 
         except Exception as e:
             self._is_running = False
+            debug_error(e, "Refactoring process failed")
             self.after(0, lambda e=str(e): self.log_viewer.log_error(f"Error: {e}"))
+            self.after(0, lambda: self.current_batch_label.configure(text="Error - See Debug Console"))
 
-    def _update_progress(self, current: int, total: int, batch) -> None:
-        """Update progress display."""
-        progress = (current + 1) / total
+    def _update_progress(self, current: int, total: int, batch, completed: bool = False) -> None:
+        """Update progress display.
+
+        Args:
+            current: Current batch index (0-based)
+            total: Total number of batches
+            batch: Current batch object
+            completed: If True, this batch just finished (show full progress)
+        """
+        if completed:
+            # Batch finished - show progress including this batch
+            progress = (current + 1) / total
+        else:
+            # Batch in progress - show progress up to but not including this batch
+            progress = current / total
         self.overall_progress.set_progress(progress)
         self.batch_indicators.set_current(current)
         self.current_batch_label.configure(text=f"Batch {current + 1}/{total}: {batch.id}")

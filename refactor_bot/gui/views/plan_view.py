@@ -4,6 +4,7 @@ Plan view for displaying and editing the refactoring plan.
 
 import customtkinter as ctk
 import threading
+import traceback
 from typing import Callable, Optional
 
 from refactor_bot.gui.theme import theme
@@ -11,6 +12,7 @@ from refactor_bot.gui.state import AppView, app_state
 from refactor_bot.gui.components.batch_list import BatchList
 from refactor_bot.gui.components.risk_badge import RiskHeatmap
 from refactor_bot.gui.components.diff_viewer import DiffViewer
+from refactor_bot.gui.components.debug_console import debug_log, debug_error
 
 
 class PlanView(ctk.CTkFrame):
@@ -271,41 +273,153 @@ class PlanView(ctk.CTkFrame):
         frame.value_label = value_label
         return frame
 
-    def generate_plan(self) -> None:
-        """Generate a refactoring plan for the current repository."""
+    def generate_plan(self, use_claude: bool = True) -> None:
+        """Generate a refactoring plan for the current repository.
+
+        Args:
+            use_claude: If True, use Claude to generate/refine the plan.
+                       If False, use heuristic-based naive plan only.
+        """
         repo = app_state.repo
         if not repo.path:
+            debug_log("No repository selected", "warning")
             return
+
+        debug_log(f"Starting plan generation for: {repo.path}", "info")
+        debug_log(f"Using Claude for planning: {use_claude}", "info")
 
         # Show loading
         self.loading_frame.place(x=0, y=0, relwidth=1, relheight=1)
         self.loading_progress.start()
 
         def generate():
-            from refactor_bot.config import Config
-            from refactor_bot.indexer import SymbolExtractor, DependencyAnalyzer
-            from refactor_bot.planner import Planner
+            try:
+                from refactor_bot.config import Config
+                from refactor_bot.indexer import SymbolExtractor, DependencyAnalyzer
+                from refactor_bot.planner import Planner
+                from refactor_bot.claude_driver import ClaudeDriver, set_debug_logger
+                from pathlib import Path
 
-            config = repo.config or Config.load_or_create(repo.path)
+                debug_log("Loading configuration...", "debug")
+                config = repo.config or Config.load_or_create(repo.path)
+                debug_log(f"Config loaded. Excludes: {config.scope_excludes}", "debug")
 
-            # Index
-            self.after(0, lambda: self.loading_label.configure(text="Indexing codebase..."))
-            symbols = SymbolExtractor(repo.path, config.scope_excludes)
-            symbols.index_files()
+                # Index
+                self.after(0, lambda: self.loading_label.configure(text="Indexing codebase..."))
+                debug_log("Indexing codebase - extracting symbols...", "info")
+                symbols = SymbolExtractor(repo.path, config.scope_excludes)
+                symbols.index_files()
+                debug_log(f"Indexed {len(symbols.files)} files, {len(symbols.symbols)} symbols", "success")
 
-            self.after(0, lambda: self.loading_label.configure(text="Analyzing dependencies..."))
-            deps = DependencyAnalyzer(repo.path, config.scope_excludes)
-            dep_graph = deps.analyze()
+                self.after(0, lambda: self.loading_label.configure(text="Analyzing dependencies..."))
+                debug_log("Analyzing dependencies...", "info")
+                deps = DependencyAnalyzer(repo.path, config.scope_excludes)
+                dep_graph = deps.analyze()
+                debug_log(f"Dependency analysis complete. {len(dep_graph.nodes)} nodes", "success")
 
-            # Generate plan
-            self.after(0, lambda: self.loading_label.configure(text="Generating plan..."))
-            planner = Planner(repo.path, config, symbols, dep_graph)
-            plan = planner.generate_naive_plan()
+                # Generate naive plan first
+                self.after(0, lambda: self.loading_label.configure(text="Generating initial plan..."))
+                debug_log("Generating naive refactoring plan...", "info")
+                planner = Planner(repo.path, config, symbols, dep_graph)
+                plan = planner.generate_naive_plan()
+                debug_log(f"Naive plan: {len(plan.batches)} batches, ~{plan.total_estimated_loc} LOC", "success")
 
-            # Update UI
-            self.after(0, lambda: self._display_plan(plan))
+                # Optionally refine with Claude
+                if use_claude and len(symbols.files) > 0:
+                    self.after(0, lambda: self.loading_label.configure(text="Asking Claude to refine plan..."))
+                    debug_log("Refining plan with Claude PlannerAgent...", "info")
+
+                    # Setup Claude driver
+                    # Path: views/plan_view.py -> gui -> refactor_bot -> project root
+                    project_root = Path(__file__).parent.parent.parent.parent
+                    prompts_dir = project_root / "prompts"
+                    schemas_dir = project_root / "schemas"
+                    debug_log(f"Prompts dir: {prompts_dir}", "debug")
+
+                    claude_config = config.claude
+                    claude_config.binary = app_state.get_claude_binary()
+
+                    # Wire up debug logging
+                    set_debug_logger(debug_log)
+
+                    claude_driver = ClaudeDriver(
+                        config=claude_config,
+                        prompts_dir=prompts_dir,
+                        schemas_dir=schemas_dir,
+                        working_dir=repo.path,
+                    )
+                    debug_log(f"Claude driver initialized. Binary: {claude_config.binary}", "debug")
+
+                    # Build architecture snapshot for context
+                    architecture_snapshot = self._build_architecture_snapshot(symbols, dep_graph)
+
+                    # Refine plan with Claude
+                    refined_plan = planner.refine_with_llm(plan, claude_driver, architecture_snapshot)
+
+                    if refined_plan and len(refined_plan.batches) > 0:
+                        debug_log(f"Claude refined plan: {len(refined_plan.batches)} batches", "success")
+                        plan = refined_plan
+                    else:
+                        debug_log("Claude returned no changes, using naive plan", "warning")
+                elif use_claude and len(symbols.files) == 0:
+                    debug_log("No files indexed - cannot use Claude for planning (nothing to analyze)", "warning")
+
+                debug_log(f"Final plan: {len(plan.batches)} batches, ~{plan.total_estimated_loc} LOC", "success")
+
+                # Update UI
+                self.after(0, lambda: self._display_plan(plan))
+
+            except Exception as e:
+                debug_error(e, "Plan generation failed")
+                self.after(0, lambda: self._on_plan_error(str(e)))
 
         threading.Thread(target=generate, daemon=True).start()
+
+    def _build_architecture_snapshot(self, symbols, dep_graph) -> str:
+        """Build a concise architecture snapshot for Claude context."""
+        lines = ["# Codebase Architecture Snapshot\n"]
+
+        # File summary
+        lines.append(f"## Files: {len(symbols.files)}")
+        lines.append(f"## Symbols: {len(symbols.symbols)}\n")
+
+        # Languages
+        langs = {}
+        for f in symbols.files.values():
+            lang = f.language or "unknown"
+            langs[lang] = langs.get(lang, 0) + 1
+        if langs:
+            lines.append("## Languages:")
+            for lang, count in sorted(langs.items(), key=lambda x: -x[1]):
+                lines.append(f"  - {lang}: {count} files")
+            lines.append("")
+
+        # Key files (high fan-in)
+        if dep_graph and dep_graph.nodes:
+            hotspots = dep_graph.get_hotspots(min_fan_in=2)[:10]
+            if hotspots:
+                lines.append("## High-Impact Files (most dependents):")
+                for node in hotspots:
+                    lines.append(f"  - {node.path} (fan-in: {node.fan_in})")
+                lines.append("")
+
+        # Symbol types
+        symbol_types = {}
+        for s in symbols.symbols:
+            st = s.symbol_type.value
+            symbol_types[st] = symbol_types.get(st, 0) + 1
+        if symbol_types:
+            lines.append("## Symbol Types:")
+            for st, count in sorted(symbol_types.items(), key=lambda x: -x[1]):
+                lines.append(f"  - {st}: {count}")
+
+        return "\n".join(lines)
+
+    def _on_plan_error(self, error_msg: str) -> None:
+        """Handle plan generation error."""
+        self.loading_progress.stop()
+        self.loading_frame.place_forget()
+        self.loading_label.configure(text=f"Error: {error_msg}")
 
     def _display_plan(self, plan) -> None:
         """Display the generated plan."""

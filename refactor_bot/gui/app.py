@@ -9,6 +9,7 @@ from refactor_bot.gui.theme import theme
 from refactor_bot.gui.state import AppView, ConnectionStatus, app_state
 from refactor_bot.gui.components.sidebar import Sidebar
 from refactor_bot.gui.components.status_bar import StatusBar
+from refactor_bot.gui.components.debug_console import DebugConsole
 from refactor_bot.gui.views.dashboard import DashboardView
 from refactor_bot.gui.views.settings import SettingsView
 from refactor_bot.gui.views.repo_select import RepoSelectView
@@ -55,6 +56,14 @@ class RefactorBotApp(ctk.CTk):
 
     def _create_layout(self) -> None:
         """Create the main layout."""
+        # Debug console at the very bottom
+        self.debug_console = DebugConsole(self)
+        self.debug_console.pack(side="bottom", fill="x")
+
+        # Status bar above debug console
+        self.status_bar = StatusBar(self)
+        self.status_bar.pack(side="bottom", fill="x")
+
         # Main container
         self.main_container = ctk.CTkFrame(self, fg_color="transparent")
         self.main_container.pack(fill="both", expand=True)
@@ -72,10 +81,6 @@ class RefactorBotApp(ctk.CTk):
             fg_color="transparent",
         )
         self.content_area.pack(side="left", fill="both", expand=True)
-
-        # Status bar
-        self.status_bar = StatusBar(self)
-        self.status_bar.pack(side="bottom", fill="x")
 
     def _create_views(self) -> None:
         """Create all view instances."""
