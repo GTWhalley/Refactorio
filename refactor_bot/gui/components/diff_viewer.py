@@ -88,6 +88,64 @@ class DiffViewer(ctk.CTkFrame):
         )
         self.diff_text.pack(side="left", fill="both", expand=True)
 
+        # Synchronize scrolling between line numbers and diff content
+        if self.show_line_numbers:
+            self._sync_scrolling()
+
+    def _sync_scrolling(self) -> None:
+        """Synchronize scrolling between line numbers and diff content."""
+        # Get the underlying tkinter text widgets
+        diff_textbox = self.diff_text._textbox
+        line_textbox = self.line_numbers._textbox
+
+        # Flag to prevent infinite scroll loops
+        self._syncing = False
+
+        def on_diff_scroll(*args):
+            if self._syncing:
+                return
+            self._syncing = True
+            # Sync line numbers to match diff position
+            line_textbox.yview_moveto(args[0])
+            self._syncing = False
+
+        def on_line_scroll(*args):
+            if self._syncing:
+                return
+            self._syncing = True
+            # Sync diff to match line numbers position
+            diff_textbox.yview_moveto(args[0])
+            self._syncing = False
+
+        # Configure scroll commands
+        diff_textbox.configure(yscrollcommand=on_diff_scroll)
+        line_textbox.configure(yscrollcommand=on_line_scroll)
+
+        # Also sync mousewheel events
+        def on_diff_mousewheel(event):
+            if self._syncing:
+                return
+            self._syncing = True
+            # Scroll line numbers by the same amount
+            line_textbox.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            self._syncing = False
+
+        def on_line_mousewheel(event):
+            if self._syncing:
+                return
+            self._syncing = True
+            # Scroll diff by the same amount
+            diff_textbox.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            self._syncing = False
+
+        diff_textbox.bind("<MouseWheel>", on_diff_mousewheel)
+        line_textbox.bind("<MouseWheel>", on_line_mousewheel)
+        # Linux uses different events
+        diff_textbox.bind("<Button-4>", lambda e: on_diff_mousewheel(type('Event', (), {'delta': 120})))
+        diff_textbox.bind("<Button-5>", lambda e: on_diff_mousewheel(type('Event', (), {'delta': -120})))
+        line_textbox.bind("<Button-4>", lambda e: on_line_mousewheel(type('Event', (), {'delta': 120})))
+        line_textbox.bind("<Button-5>", lambda e: on_line_mousewheel(type('Event', (), {'delta': -120})))
+
     def set_diff(self, diff: str, filename: Optional[str] = None) -> None:
         """Set the diff content to display."""
         self._diff_content = diff

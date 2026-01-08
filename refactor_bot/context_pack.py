@@ -165,6 +165,60 @@ class ContextPackBuilder:
 
         return "\n".join(lines)
 
+    def _get_scope_files(self, scope_globs: list[str]) -> list[str]:
+        """Get all files matching the scope globs."""
+        import fnmatch
+
+        matching_files = []
+
+        for pattern in scope_globs:
+            # Check if it's a direct file path (from batch splitting)
+            full_path = self.repo_path / pattern
+            if full_path.exists() and full_path.is_file():
+                matching_files.append(pattern)
+                continue
+
+            # Otherwise treat as glob pattern
+            if self.symbols:
+                for file_path in self.symbols.files:
+                    if fnmatch.fnmatch(file_path, pattern) or fnmatch.fnmatch(file_path, pattern.replace("**", "*")):
+                        if file_path not in matching_files:
+                            matching_files.append(file_path)
+
+        return matching_files
+
+    def _read_full_file(self, file_path: str, budget: ContextBudget) -> Optional[str]:
+        """Read the full content of a file within budget."""
+        full_path = self.repo_path / file_path
+
+        if not full_path.exists():
+            return None
+
+        try:
+            with open(full_path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+        except Exception:
+            return None
+
+        # Check if we can fit this file
+        file_block = f"### {file_path}\n```\n{content}\n```"
+
+        if not budget.can_add_chars(len(file_block)):
+            # Try to fit at least part of the file
+            available = budget.remaining_chars - 100  # Leave room for header
+            if available > 500:
+                truncated = content[:available]
+                file_block = f"### {file_path} (truncated)\n```\n{truncated}\n[...truncated...]\n```"
+                budget.add_chars(len(file_block))
+                return file_block
+            return None
+
+        budget.add_chars(len(file_block))
+        lines = content.count('\n') + 1
+        budget.add_lines(lines)
+
+        return file_block
+
     def _get_recent_ledger_entries(self, budget: ContextBudget) -> str:
         """Get recent ledger entries within budget."""
         if not self.ledger:
@@ -267,34 +321,19 @@ class ContextPackBuilder:
         sections.append(batch_info)
         budget.add_chars(len(batch_info))
 
-        # 2. Files in scope
-        for glob_pattern in batch.scope_globs:
-            # Try to match files
-            import fnmatch
+        # 2. Files in scope - include FULL content of all scope files
+        # The patcher needs complete file contents to generate accurate diffs
+        scope_files = self._get_scope_files(batch.scope_globs)
+        sections.append(f"## Files in Scope ({len(scope_files)} files)")
 
-            matching_files = []
-            if self.symbols:
-                for file_path in self.symbols.files:
-                    if fnmatch.fnmatch(file_path, glob_pattern):
-                        matching_files.append(file_path)
-
-            for file_path in matching_files[:5]:  # Limit to 5 files per pattern
-                # Add symbol summary
-                summary = self._get_symbol_summary(file_path)
-                if summary and budget.can_add_chars(len(summary)):
-                    sections.append(summary)
-                    budget.add_chars(len(summary))
-
-                # Add file excerpt
-                excerpt = self._read_file_excerpt(file_path, budget)
-                if excerpt:
-                    sections.append(excerpt)
-
-                # Add dependency info
-                dep_info = self._get_dependency_info(file_path)
-                if dep_info and budget.can_add_chars(len(dep_info)):
-                    sections.append(dep_info)
-                    budget.add_chars(len(dep_info))
+        for file_path in scope_files:
+            # Read FULL file content (not just excerpt)
+            full_content = self._read_full_file(file_path, budget)
+            if full_content:
+                sections.append(full_content)
+            else:
+                # If we can't fit the full file, at least note it
+                sections.append(f"[File {file_path} truncated due to context limits]")
 
         # 3. Recent activity
         ledger_info = self._get_recent_ledger_entries(budget)

@@ -26,15 +26,15 @@ class ClaudeConfig(BaseModel):
         description="Tools to expose (--tools flag)",
     )
     max_turns_patcher: int = Field(
-        default=10,
+        default=50,
         ge=1,
-        le=50,
-        description="Max turns for patcher agent",
+        le=100,
+        description="Max turns for patcher agent (high since Claude may need multiple internal turns)",
     )
     max_turns_planner: int = Field(
-        default=6,
+        default=50,
         ge=1,
-        le=20,
+        le=100,
         description="Max turns for planner agent",
     )
 
@@ -56,10 +56,10 @@ class Config(BaseModel):
         description="Maximum number of batches to generate",
     )
     max_files_per_batch: int = Field(
-        default=15,
+        default=5,
         ge=1,
         le=100,
-        description="Maximum files per batch (large batches will be split)",
+        description="Maximum files per batch (smaller = less tokens per call)",
     )
     retry_per_batch: int = Field(
         default=2,
@@ -133,17 +133,23 @@ class Config(BaseModel):
         description="Claude Code CLI configuration",
     )
 
+    # Planning options
+    use_llm_planner: bool = Field(
+        default=True,
+        description="Use Claude to refine the naive plan (disable to save tokens)",
+    )
+
     # Context budget
     max_prompt_chars: int = Field(
-        default=40000,
+        default=150000,
         ge=10000,
-        le=100000,
-        description="Maximum characters in prompt body",
+        le=500000,
+        description="Maximum characters in prompt body (Claude supports ~200k tokens)",
     )
     max_file_excerpt_lines: int = Field(
-        default=600,
+        default=3000,
         ge=100,
-        le=2000,
+        le=10000,
         description="Maximum total lines of file excerpts",
     )
     max_ledger_entries: int = Field(

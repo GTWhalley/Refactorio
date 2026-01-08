@@ -89,51 +89,6 @@ class QuickActionCard(ctk.CTkFrame):
             self.action()
 
 
-class StatCard(ctk.CTkFrame):
-    """A card showing a statistic."""
-
-    def __init__(
-        self,
-        master,
-        label: str,
-        value: str,
-        icon: str = "",
-        **kwargs
-    ):
-        super().__init__(
-            master,
-            fg_color=theme.colors.bg_medium,
-            corner_radius=theme.dimensions.card_radius,
-            **kwargs
-        )
-
-        content = ctk.CTkFrame(self, fg_color="transparent")
-        content.pack(fill="both", expand=True, padx=16, pady=16)
-
-        # Value
-        self.value_label = ctk.CTkLabel(
-            content,
-            text=value,
-            font=(theme.fonts.family, theme.fonts.size_xxl, "bold"),
-            text_color=theme.colors.text_primary,
-        )
-        self.value_label.pack(anchor="w")
-
-        # Label
-        label_text = f"{icon} {label}" if icon else label
-        self.label_label = ctk.CTkLabel(
-            content,
-            text=label_text,
-            font=(theme.fonts.family, theme.fonts.size_sm),
-            text_color=theme.colors.text_secondary,
-        )
-        self.label_label.pack(anchor="w", pady=(4, 0))
-
-    def set_value(self, value: str) -> None:
-        """Update the stat value."""
-        self.value_label.configure(text=value)
-
-
 class DashboardView(ctk.CTkFrame):
     """
     Dashboard view with quick actions and status overview.
@@ -251,34 +206,6 @@ class DashboardView(ctk.CTkFrame):
         for i in range(4):
             actions_frame.columnconfigure(i, weight=1)
 
-        # Stats section
-        stats_label = ctk.CTkLabel(
-            scroll,
-            text="Statistics",
-            font=(theme.fonts.family, theme.fonts.size_lg, "bold"),
-            text_color=theme.colors.text_primary,
-        )
-        stats_label.pack(anchor="w", pady=(0, 12))
-
-        stats_frame = ctk.CTkFrame(scroll, fg_color="transparent")
-        stats_frame.pack(fill="x")
-
-        # Stat cards
-        self.stat_runs = StatCard(stats_frame, "Total Runs", "0", "🔄")
-        self.stat_runs.grid(row=0, column=0, padx=(0, 12), sticky="nsew")
-
-        self.stat_batches = StatCard(stats_frame, "Batches Completed", "0", "✓")
-        self.stat_batches.grid(row=0, column=1, padx=(0, 12), sticky="nsew")
-
-        self.stat_files = StatCard(stats_frame, "Files Modified", "0", "📄")
-        self.stat_files.grid(row=0, column=2, padx=(0, 12), sticky="nsew")
-
-        self.stat_lines = StatCard(stats_frame, "Lines Changed", "0", "📝")
-        self.stat_lines.grid(row=0, column=3, sticky="nsew")
-
-        for i in range(4):
-            stats_frame.columnconfigure(i, weight=1)
-
     def update_connection_status(self, status: ConnectionStatus) -> None:
         """Update the connection status banner."""
         if status == ConnectionStatus.CONNECTED:
@@ -309,16 +236,3 @@ class DashboardView(ctk.CTkFrame):
                 text="Claude Code status unknown. Check Settings.",
                 text_color=theme.colors.warning,
             )
-
-    def update_stats(
-        self,
-        runs: int = 0,
-        batches: int = 0,
-        files: int = 0,
-        lines: int = 0,
-    ) -> None:
-        """Update the statistics cards."""
-        self.stat_runs.set_value(str(runs))
-        self.stat_batches.set_value(str(batches))
-        self.stat_files.set_value(str(files))
-        self.stat_lines.set_value(str(lines))

@@ -6,7 +6,7 @@ by leveraging Claude Code in headless mode with structured outputs.
 """
 
 __version__ = "0.1.0"
-__author__ = "Refactorio Team"
+__author__ = "Graydon Whalley"
 
 from refactor_bot.config import Config, ClaudeConfig
 

@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"
 authors = [
-    { name = "Refactorio Team" }
+    { name = "Graydon Whalley" }
 ]
 keywords = ["refactoring", "automation", "claude", "code"]
 classifiers = [
@@ -49,9 +49,9 @@ dev = [
 refactorio = "refactor_bot.main:app"
 
 [project.urls]
-Homepage = "https://github.com/refactorio/refactorio"
-Documentation = "https://github.com/refactorio/refactorio#readme"
-Repository = "https://github.com/refactorio/refactorio"
+Homepage = "https://github.com/GTWhalley/Refactorio"
+Documentation = "https://github.com/GTWhalley/Refactorio#readme"
+Repository = "https://github.com/GTWhalley/Refactorio"
 
 [tool.hatch.build.targets.wheel]
 packages = ["refactor_bot"]

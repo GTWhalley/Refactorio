@@ -28,6 +28,31 @@ _debug_logger: Optional[Callable[[str, str], None]] = None
 # Optional activity callback - called periodically during long operations
 _activity_callback: Optional[Callable[[str, float], None]] = None
 
+# Track active Claude process for termination
+_active_process: Optional[subprocess.Popen] = None
+_process_lock = threading.Lock()
+
+
+def terminate_active_process() -> bool:
+    """Terminate any active Claude process.
+
+    Returns True if a process was terminated, False if none was running.
+    """
+    global _active_process
+    with _process_lock:
+        if _active_process is not None and _active_process.poll() is None:
+            _debug("Terminating active Claude process...", "warning")
+            _active_process.terminate()
+            try:
+                _active_process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                _debug("Process didn't terminate, killing...", "warning")
+                _active_process.kill()
+                _active_process.wait()
+            _active_process = None
+            return True
+        return False
+
 
 def set_debug_logger(logger: Callable[[str, str], None]) -> None:
     """Set the debug logger function."""
@@ -306,26 +331,30 @@ class ClaudeDriver:
         except json.JSONDecodeError as e:
             return ClaudeResponse.from_error(f"Invalid schema JSON: {e}")
 
-        # Build command
+        # Build command - for patcher, we don't expose tools since context is provided
+        # This prevents Claude from spending turns on file reads instead of outputting JSON
         cmd = [
             self.binary_path,
             "-p", prompt,
             "--output-format", "json",
             "--json-schema", json.dumps(schema),
             "--system-prompt-file", str(system_prompt_file),
-            "--allowedTools", self.config.allowed_tools,
-            "--tools", self.config.tools,
             "--max-turns", str(max_turns),
             "--session-id", session_id,
         ]
 
+        # Only add tools for planner role (which may need to explore)
+        if role == AgentRole.PLANNER:
+            cmd.extend(["--allowedTools", self.config.allowed_tools])
+            cmd.extend(["--tools", self.config.tools])
+
         # Log the command (without the full prompt for brevity)
+        tools_str = f"--allowedTools {self.config.allowed_tools}" if role == AgentRole.PLANNER else "(no tools)"
         cmd_display = [
             self.binary_path, "-p", f"<{len(prompt)} chars>",
             "--output-format", "json", "--json-schema", "<schema>",
             "--system-prompt-file", str(system_prompt_file),
-            "--allowedTools", self.config.allowed_tools,
-            "--tools", self.config.tools,
+            tools_str,
             "--max-turns", str(max_turns),
             "--session-id", session_id,
         ]
@@ -336,6 +365,8 @@ class ClaudeDriver:
             _debug("Starting Claude process...", "info")
             start_time = time.time()
 
+            global _active_process
+
             # Use Popen for streaming output and activity monitoring
             process = subprocess.Popen(
                 cmd,
@@ -344,6 +375,10 @@ class ClaudeDriver:
                 text=True,
                 cwd=self.working_dir,
             )
+
+            # Track the active process for potential termination
+            with _process_lock:
+                _active_process = process
 
             # Activity monitor thread
             stop_monitor = threading.Event()
@@ -373,6 +408,9 @@ class ClaudeDriver:
             finally:
                 stop_monitor.set()
                 monitor_thread.join(timeout=1.0)
+                # Clear active process tracking
+                with _process_lock:
+                    _active_process = None
 
             elapsed = time.time() - start_time
             _debug(f"Claude process completed in {elapsed:.1f}s with return code: {process.returncode}", "info")
@@ -380,6 +418,11 @@ class ClaudeDriver:
 
             result_stdout = "".join(stdout_chunks)
             result_stderr = "".join(stderr_chunks)
+
+            # Check if process was terminated (SIGTERM = -15, SIGKILL = -9)
+            if process.returncode in (-15, -9, 15, 9):
+                _debug("Claude process was terminated by user", "warning")
+                return ClaudeResponse.from_error("Claude process was terminated by user")
 
             if process.returncode != 0:
                 _debug(f"Claude stderr: {result_stderr[:500]}", "error")
@@ -391,20 +434,51 @@ class ClaudeDriver:
             try:
                 output = json.loads(result_stdout)
             except json.JSONDecodeError:
+                _debug(f"Failed to parse JSON. Raw output: {result_stdout[:1000]}", "error")
                 return ClaudeResponse.from_error(
                     f"Failed to parse Claude output as JSON: {result_stdout[:500]}"
                 )
 
-            # Extract structured output
+            _debug(f"Parsed output type: {type(output).__name__}", "debug")
+            _debug(f"Output keys: {list(output.keys()) if isinstance(output, dict) else 'N/A'}", "debug")
+
+            # Check for max_turns exhaustion - this happens when Claude runs out of turns
+            # before producing structured output (is_error may be False but no output)
+            subtype = output.get("subtype", "")
+            if subtype == "error_max_turns":
+                num_turns = output.get("num_turns", "?")
+                _debug(f"Claude exhausted max turns ({num_turns}) without producing structured output", "warning")
+                return ClaudeResponse.from_error(
+                    f"Claude exhausted max turns ({num_turns}) without producing structured output. "
+                    f"Try increasing max_turns_patcher in config or reducing batch size/context."
+                )
+
+            # Check for errors in the response
+            if output.get("is_error") or output.get("errors"):
+                errors = output.get("errors", [])
+                error_msg = "; ".join(str(e) for e in errors) if errors else "Unknown error"
+                _debug(f"Claude returned error response: {error_msg}", "error")
+                _debug(f"Full error output: {str(output)[:1000]}", "debug")
+                return ClaudeResponse.from_error(f"Claude error: {error_msg}")
+
+            # Extract structured output - Claude Code nests it in the response
             structured_output = output.get("structured_output")
             if structured_output is None:
-                # Try to find it in the result
-                if isinstance(output, dict):
-                    structured_output = output
-                else:
-                    return ClaudeResponse.from_error(
-                        "No structured_output in Claude response"
-                    )
+                # Check if it might be in a 'result' field
+                result_field = output.get("result")
+                if isinstance(result_field, dict):
+                    structured_output = result_field.get("structured_output")
+
+                # Still not found - log what we got and try the whole output
+                if structured_output is None:
+                    _debug(f"No structured_output found. Output sample: {str(output)[:500]}", "warning")
+                    # Maybe the whole output IS the structured output (if schema was enforced)
+                    if isinstance(output, dict) and "status" in output:
+                        structured_output = output
+                    else:
+                        return ClaudeResponse.from_error(
+                            f"No structured_output in Claude response. Keys: {list(output.keys()) if isinstance(output, dict) else 'not a dict'}"
+                        )
 
             # Validate against schema (defense in depth)
             validation_error = self._validate_schema(structured_output, schema)

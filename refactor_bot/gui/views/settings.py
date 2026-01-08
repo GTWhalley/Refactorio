@@ -199,6 +199,63 @@ class SettingsView(ctk.CTkFrame):
         )
         self.save_btn.pack(side="left")
 
+        # Planning options section
+        planning_section = ctk.CTkFrame(
+            scroll,
+            fg_color=theme.colors.bg_medium,
+            corner_radius=theme.dimensions.card_radius,
+        )
+        planning_section.pack(fill="x", pady=(0, 16))
+
+        planning_content = ctk.CTkFrame(planning_section, fg_color="transparent")
+        planning_content.pack(fill="x", padx=20, pady=20)
+
+        planning_title = ctk.CTkLabel(
+            planning_content,
+            text="Planning Options",
+            font=(theme.fonts.family, theme.fonts.size_lg, "bold"),
+            text_color=theme.colors.text_primary,
+        )
+        planning_title.pack(anchor="w")
+
+        planning_desc = ctk.CTkLabel(
+            planning_content,
+            text="Configure how refactoring plans are generated",
+            font=(theme.fonts.family, theme.fonts.size_sm),
+            text_color=theme.colors.text_secondary,
+        )
+        planning_desc.pack(anchor="w", pady=(4, 16))
+
+        # LLM Planner toggle
+        llm_frame = ctk.CTkFrame(planning_content, fg_color="transparent")
+        llm_frame.pack(fill="x", pady=(0, 8))
+
+        self.use_llm_planner_var = ctk.BooleanVar(value=True)
+        self.use_llm_planner_switch = ctk.CTkSwitch(
+            llm_frame,
+            text="Use Claude to refine plans",
+            variable=self.use_llm_planner_var,
+            font=(theme.fonts.family, theme.fonts.size_md),
+            text_color=theme.colors.text_primary,
+            progress_color=theme.colors.accent_primary,
+            button_color=theme.colors.accent_primary,
+            button_hover_color=theme.colors.accent_secondary,
+            command=self._on_llm_planner_toggle,
+        )
+        self.use_llm_planner_switch.pack(side="left")
+
+        llm_help = ctk.CTkLabel(
+            planning_content,
+            text=(
+                "When enabled, Claude will analyze the codebase and refine the naive plan.\n"
+                "Disable to use only heuristic-based planning (saves tokens)."
+            ),
+            font=(theme.fonts.family, theme.fonts.size_xs),
+            text_color=theme.colors.text_muted,
+            justify="left",
+        )
+        llm_help.pack(anchor="w", pady=(4, 0))
+
         # Help section
         help_section = ctk.CTkFrame(
             scroll,
@@ -317,9 +374,10 @@ class SettingsView(ctk.CTkFrame):
                 height=32,
                 font=(theme.fonts.family_mono, theme.fonts.size_xs),
                 fg_color="transparent",
-                hover_color=theme.colors.bg_light if exists else "transparent",
+                hover_color=theme.colors.bg_light if exists else theme.colors.bg_medium,
                 text_color=theme.colors.text_secondary if exists else theme.colors.text_muted,
-                command=lambda p=str(path): self._use_path(p) if Path(p).exists() else None,
+                state="normal" if exists else "disabled",
+                command=lambda p=str(path): self._use_path(p),
             )
             btn.pack(fill="x", pady=2)
 
@@ -338,6 +396,12 @@ class SettingsView(ctk.CTkFrame):
         if settings.binary_path:
             self.path_entry.delete(0, "end")
             self.path_entry.insert(0, settings.binary_path)
+
+        # Load LLM planner setting from repo config
+        if app_state.repo.config:
+            self.use_llm_planner_var.set(app_state.repo.config.use_llm_planner)
+        else:
+            self.use_llm_planner_var.set(True)  # Default
 
     def _browse_for_binary(self) -> None:
         """Open file browser to select Claude binary."""
@@ -466,6 +530,23 @@ class SettingsView(ctk.CTkFrame):
         # Show confirmation
         self.save_btn.configure(text="✓ Saved!")
         self.after(2000, lambda: self.save_btn.configure(text="Save Settings"))
+
+    def _on_llm_planner_toggle(self) -> None:
+        """Handle LLM planner toggle change."""
+        from refactor_bot.config import Config
+
+        use_llm = self.use_llm_planner_var.get()
+
+        # Create config if we don't have one yet
+        if not app_state.repo.config and app_state.repo.path:
+            app_state.repo.config = Config.load_or_create(app_state.repo.path)
+
+        # Update the repo config
+        if app_state.repo.config:
+            app_state.repo.config.use_llm_planner = use_llm
+            # Save to disk
+            if app_state.repo.path:
+                app_state.repo.config.save(app_state.repo.path)
 
     def _launch_claude_login(self) -> None:
         """Launch Claude in Terminal for interactive login."""

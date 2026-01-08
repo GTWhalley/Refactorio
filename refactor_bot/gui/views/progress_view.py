@@ -372,101 +372,139 @@ class ProgressView(ctk.CTkFrame):
                     if self._should_stop:
                         break
 
-                # Update UI
-                self.after(0, lambda i=i, b=batch: self._update_progress(i, total, b))
-                self.after(0, lambda b=batch: self.log_viewer.log_info(f"Processing {b.id}: {b.goal}"))
+                try:
+                    # Update UI
+                    self.after(0, lambda i=i, b=batch: self._update_progress(i, total, b))
+                    self.after(0, lambda b=batch: self.log_viewer.log_info(f"Processing {b.id}: {b.goal}"))
 
-                # Show activity display for this batch
-                self.after(0, lambda b=batch: self.activity_display.start_batch(b.id, b.goal))
+                    # Show activity display for this batch
+                    self.after(0, lambda b=batch: self.activity_display.start_batch(b.id, b.goal))
 
-                batch_start = time.time()
+                    batch_start = time.time()
 
-                # Build context - Stage 0
-                self.after(0, lambda: self.activity_display.set_stage(0))
-                debug_log(f"Building context for batch {batch.id}...", "debug")
-                context = context_builder.build_patcher_context(batch)
-                debug_log(f"Context built: {len(context)} chars", "debug")
+                    # Build context - Stage 0
+                    self.after(0, lambda: self.activity_display.set_stage(0))
+                    debug_log(f"Building context for batch {batch.id}...", "debug")
+                    context = context_builder.build_patcher_context(batch)
+                    debug_log(f"Context built: {len(context)} chars", "debug")
 
-                # Call Claude - Stage 1
-                self.after(0, lambda: self.activity_display.set_stage(1))
-                self.after(0, lambda: self.log_viewer.log_info("Calling Claude Code CLI..."))
-                claude_binary = app_state.get_claude_binary()
-                debug_log(f"Invoking Claude: {claude_binary}", "info")
-                debug_log(f"  Batch goal: {batch.goal}", "debug")
-                debug_log(f"  Scope: {batch.scope_globs}", "debug")
+                    # Call Claude - Stage 1 (with retries)
+                    self.after(0, lambda: self.activity_display.set_stage(1))
+                    self.after(0, lambda: self.log_viewer.log_info("Calling Claude Code CLI..."))
+                    claude_binary = app_state.get_claude_binary()
+                    debug_log(f"Invoking Claude: {claude_binary}", "info")
+                    debug_log(f"  Batch goal: {batch.goal}", "debug")
+                    debug_log(f"  Scope: {batch.scope_globs}", "debug")
 
-                response = claude_driver.call_patcher(context)
+                    # Retry loop for Claude calls
+                    max_retries = config.retry_per_batch
+                    retry_count = 0
+                    response = None
 
-                debug_log(f"Claude response received. Success: {response.success}", "info")
-                if response.raw_output:
-                    debug_log(f"Raw output length: {len(response.raw_output)} chars", "debug")
+                    while retry_count <= max_retries:
+                        if retry_count > 0:
+                            self.after(0, lambda r=retry_count, m=max_retries:
+                                self.log_viewer.log_warning(f"Retrying... (attempt {r + 1}/{m + 1})"))
+                            debug_log(f"Retry attempt {retry_count}/{max_retries}", "info")
 
-                if not response.success:
+                        response = claude_driver.call_patcher(context)
+
+                        if response.success:
+                            break
+
+                        retry_count += 1
+                        if retry_count <= max_retries:
+                            debug_log(f"Claude call failed, will retry: {response.error_message}", "warning")
+                        else:
+                            debug_log(f"Claude call failed after {max_retries + 1} attempts: {response.error_message}", "error")
+
+                    debug_log(f"Claude response received. Success: {response.success}", "info")
+                    if response.raw_output:
+                        debug_log(f"Raw output length: {len(response.raw_output)} chars", "debug")
+
+                    if not response.success:
+                        failed += 1
+                        debug_log(f"Claude error: {response.error_message}", "error")
+                        self.after(0, lambda e=response.error_message: self.log_viewer.log_error(f"Claude error: {e}"))
+                        self.after(0, lambda i=i: self.batch_indicators.set_status(i, "failed"))
+                        self.after(0, lambda: self.activity_display.stop_batch())
+                        continue
+
+                    output = response.structured_output
+                    status = output.get("status", "blocked")
+
+                    if status == "noop":
+                        self.after(0, lambda: self.log_viewer.log_info("No changes needed"))
+                        self.after(0, lambda i=i: self.batch_indicators.set_status(i, "skipped"))
+                        self.after(0, lambda: self.activity_display.stop_batch())
+                        self.after(0, lambda i=i, b=batch: self._update_progress(i, total, b, completed=True))
+                        completed += 1
+                        continue
+
+                    if status == "blocked":
+                        self.after(0, lambda r=output.get("rationale", ""): self.log_viewer.log_warning(f"Blocked: {r}"))
+                        self.after(0, lambda i=i: self.batch_indicators.set_status(i, "skipped"))
+                        self.after(0, lambda: self.activity_display.stop_batch())
+                        self.after(0, lambda i=i, b=batch: self._update_progress(i, total, b, completed=True))
+                        continue
+
+                    # Apply patch - Stage 2
+                    self.after(0, lambda: self.activity_display.set_stage(2))
+                    patch_diff = output.get("patch_unified_diff", "")
+                    if patch_diff:
+                        self.after(0, lambda d=patch_diff: self.diff_viewer.set_diff(d))
+
+                        result = apply_patch(
+                            worktree_path,
+                            patch_diff,
+                            batch.scope_globs,
+                            batch.diff_budget_loc,
+                        )
+
+                        if not result.success:
+                            failed += 1
+                            self.after(0, lambda e=result.error_message: self.log_viewer.log_error(f"Patch failed: {e}"))
+                            # Revert any partial changes
+                            repo_manager.revert_to_baseline()
+                            self.after(0, lambda: self.log_viewer.log_info("Reverted to baseline"))
+                            self.after(0, lambda i=i: self.batch_indicators.set_status(i, "failed"))
+                            self.after(0, lambda: self.activity_display.stop_batch())
+                            continue
+
+                        # Verify - Stage 3
+                        self.after(0, lambda: self.activity_display.set_stage(3))
+                        self.after(0, lambda: self.log_viewer.log_info("Running verification..."))
+                        verification = verifier.run_fast()
+
+                        if not verification.passed:
+                            failed += 1
+                            self.after(0, lambda: self.log_viewer.log_error("Verification failed"))
+                            repo_manager.revert_to_baseline()
+                            self.after(0, lambda i=i: self.batch_indicators.set_status(i, "failed"))
+                            self.after(0, lambda: self.activity_display.stop_batch())
+                            continue
+
+                        # Checkpoint
+                        repo_manager.checkpoint_commit(batch.id, batch.goal)
+                        completed += 1
+                        self.after(0, lambda: self.log_viewer.log_success("Batch completed"))
+                        self.after(0, lambda i=i: self.batch_indicators.set_status(i, "completed"))
+                        self.after(0, lambda: self.activity_display.stop_batch())
+                        self.after(0, lambda i=i, b=batch: self._update_progress(i, total, b, completed=True))
+
+                except Exception as batch_error:
+                    # Catch any unexpected error during batch processing
                     failed += 1
-                    debug_log(f"Claude error: {response.error_message}", "error")
-                    self.after(0, lambda e=response.error_message: self.log_viewer.log_error(f"Claude error: {e}"))
+                    debug_error(batch_error, f"Unexpected error in batch {batch.id}")
+                    self.after(0, lambda e=str(batch_error): self.log_viewer.log_error(f"Batch error: {e}"))
+                    # Always revert on any error to ensure clean state
+                    try:
+                        repo_manager.revert_to_baseline()
+                        self.after(0, lambda: self.log_viewer.log_info("Reverted to baseline"))
+                    except Exception:
+                        pass  # Best effort revert
                     self.after(0, lambda i=i: self.batch_indicators.set_status(i, "failed"))
                     self.after(0, lambda: self.activity_display.stop_batch())
-                    continue
-
-                output = response.structured_output
-                status = output.get("status", "blocked")
-
-                if status == "noop":
-                    self.after(0, lambda: self.log_viewer.log_info("No changes needed"))
-                    self.after(0, lambda i=i: self.batch_indicators.set_status(i, "skipped"))
-                    self.after(0, lambda: self.activity_display.stop_batch())
-                    self.after(0, lambda i=i, b=batch: self._update_progress(i, total, b, completed=True))
-                    completed += 1
-                    continue
-
-                if status == "blocked":
-                    self.after(0, lambda r=output.get("rationale", ""): self.log_viewer.log_warning(f"Blocked: {r}"))
-                    self.after(0, lambda i=i: self.batch_indicators.set_status(i, "skipped"))
-                    self.after(0, lambda: self.activity_display.stop_batch())
-                    self.after(0, lambda i=i, b=batch: self._update_progress(i, total, b, completed=True))
-                    continue
-
-                # Apply patch - Stage 2
-                self.after(0, lambda: self.activity_display.set_stage(2))
-                patch_diff = output.get("patch_unified_diff", "")
-                if patch_diff:
-                    self.after(0, lambda d=patch_diff: self.diff_viewer.set_diff(d))
-
-                    result = apply_patch(
-                        worktree_path,
-                        patch_diff,
-                        batch.scope_globs,
-                        batch.diff_budget_loc,
-                    )
-
-                    if not result.success:
-                        failed += 1
-                        self.after(0, lambda e=result.error_message: self.log_viewer.log_error(f"Patch failed: {e}"))
-                        self.after(0, lambda i=i: self.batch_indicators.set_status(i, "failed"))
-                        self.after(0, lambda: self.activity_display.stop_batch())
-                        continue
-
-                    # Verify - Stage 3
-                    self.after(0, lambda: self.activity_display.set_stage(3))
-                    self.after(0, lambda: self.log_viewer.log_info("Running verification..."))
-                    verification = verifier.run_fast()
-
-                    if not verification.passed:
-                        failed += 1
-                        self.after(0, lambda: self.log_viewer.log_error("Verification failed"))
-                        repo_manager.revert_to_baseline()
-                        self.after(0, lambda i=i: self.batch_indicators.set_status(i, "failed"))
-                        self.after(0, lambda: self.activity_display.stop_batch())
-                        continue
-
-                    # Checkpoint
-                    repo_manager.checkpoint_commit(batch.id, batch.goal)
-                    completed += 1
-                    self.after(0, lambda: self.log_viewer.log_success("Batch completed"))
-                    self.after(0, lambda i=i: self.batch_indicators.set_status(i, "completed"))
-                    self.after(0, lambda: self.activity_display.stop_batch())
-                    self.after(0, lambda i=i, b=batch: self._update_progress(i, total, b, completed=True))
 
                 # Update stats
                 self.after(0, lambda c=completed, f=failed, r=total-i-1: self._update_stats(c, f, r))
@@ -542,3 +580,8 @@ class ProgressView(ctk.CTkFrame):
         self._should_stop = True
         self._is_paused = False
         self.log_viewer.log_warning("Stopping...")
+
+        # Terminate any active Claude process immediately
+        from refactor_bot.claude_driver import terminate_active_process
+        if terminate_active_process():
+            self.log_viewer.log_warning("Terminated active Claude process")

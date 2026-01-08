@@ -273,12 +273,10 @@ class PlanView(ctk.CTkFrame):
         frame.value_label = value_label
         return frame
 
-    def generate_plan(self, use_claude: bool = True) -> None:
+    def generate_plan(self) -> None:
         """Generate a refactoring plan for the current repository.
 
-        Args:
-            use_claude: If True, use Claude to generate/refine the plan.
-                       If False, use heuristic-based naive plan only.
+        Uses config.use_llm_planner to determine whether to refine with Claude.
         """
         repo = app_state.repo
         if not repo.path:
@@ -286,7 +284,6 @@ class PlanView(ctk.CTkFrame):
             return
 
         debug_log(f"Starting plan generation for: {repo.path}", "info")
-        debug_log(f"Using Claude for planning: {use_claude}", "info")
 
         # Show loading
         self.loading_frame.place(x=0, y=0, relwidth=1, relheight=1)
@@ -301,8 +298,13 @@ class PlanView(ctk.CTkFrame):
                 from pathlib import Path
 
                 debug_log("Loading configuration...", "debug")
-                config = repo.config or Config.load_or_create(repo.path)
+                # Always get fresh config from app_state to pick up settings changes
+                config = app_state.repo.config or Config.load_or_create(repo.path)
                 debug_log(f"Config loaded. Excludes: {config.scope_excludes}", "debug")
+
+                # Check config for LLM planner setting (must be inside thread to get fresh value)
+                use_claude = config.use_llm_planner
+                debug_log(f"Using Claude for planning: {use_claude}", "info")
 
                 # Index
                 self.after(0, lambda: self.loading_label.configure(text="Indexing codebase..."))

@@ -206,15 +206,21 @@ class Planner:
         files_by_lang = self._get_files_by_language()
 
         # 1. Formatting pass (if enabled)
-        # Only format actual code files, not config/data/resource files
-        formattable_langs = {
-            "python", "javascript", "typescript", "rust", "go", "java",
-            "gdscript", "c", "cpp", "csharp", "swift", "kotlin", "ruby",
-            "php", "lua", "shell", "bash",
+        # Only format languages that have actual formatters - skip others
+        # Using LLM for formatting is wasteful; prefer external tools
+        langs_with_formatters = {
+            "python",      # black, ruff
+            "javascript",  # prettier
+            "typescript",  # prettier
+            "rust",        # rustfmt
+            "go",          # gofmt
+            "java",        # google-java-format
+            # Note: gdscript, lua, etc. don't have standard formatters
+            # so we skip them to avoid wasting tokens
         }
         if self.config.allow_formatting_only:
             for lang, files in files_by_lang.items():
-                if files and lang in formattable_langs:
+                if files and lang in langs_with_formatters:
                     batches.append(Batch(
                         id=self._next_batch_id(),
                         goal=f"Format all {lang} files",
@@ -281,6 +287,28 @@ class Planner:
                     verifier_level=VerifierLevel.FAST,
                     notes="Safe to modify - no other files depend on these",
                 ))
+
+        # 5. Fallback: if no batches generated but we have files, create general refactor batches
+        # This handles languages without formatters or dependency analysis (e.g., GDScript)
+        if not batches and self.symbols and self.symbols.files:
+            # Group files by language and create refactor batches
+            for lang, files in files_by_lang.items():
+                if files and lang not in ("unknown", "json", "yaml", "toml", "md", "txt", "cfg", "import"):
+                    batches.append(Batch(
+                        id=self._next_batch_id(),
+                        goal=f"Review and refactor {lang} files",
+                        scope_globs=[f"**/*.{self._lang_extension(lang)}"],
+                        allowed_operations=[
+                            BatchOperation.RENAME.value,
+                            BatchOperation.EXTRACT_FUNCTION.value,
+                            BatchOperation.REFACTOR_INTERNAL.value,
+                            BatchOperation.ADD_TYPES.value,
+                        ],
+                        diff_budget_loc=self.config.diff_budget_loc,
+                        risk_score=30,  # Moderate risk since we don't have dep analysis
+                        verifier_level=VerifierLevel.FAST,
+                        notes=f"General refactoring for {lang} files",
+                    ))
 
         # Split large batches based on file count
         batches = self._split_large_batches(batches)
