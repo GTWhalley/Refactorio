@@ -151,6 +151,18 @@ refactor_bot/
 
 This project was developed with assistance from [Claude Code](https://claude.ai/code), Anthropic's AI coding assistant. The architecture, implementation, and iterative debugging were done collaboratively between the author and Claude Code over multiple sessions.
 
+## Disclaimer
+
+**USE AT YOUR OWN RISK.** This tool automatically modifies source code using AI-generated patches. While Refactorio includes safety mechanisms (git worktree isolation, automatic backups, verification checks, and rollback support), there is always a risk of unintended changes, data loss, or code corruption.
+
+Before using Refactorio:
+- **Always back up your code** independently of Refactorio's built-in backups
+- **Use version control** and ensure all changes are committed before running
+- **Review generated patches** before merging changes to your main branch
+- **Test thoroughly** after any refactoring operation
+
+The authors are not responsible for any damage, data loss, or other issues arising from the use of this software.
+
 ## License
 
-MIT
+MIT License - see [LICENSE](LICENSE) for details.

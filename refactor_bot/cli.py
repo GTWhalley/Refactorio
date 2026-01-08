@@ -54,6 +54,7 @@ def print_header():
     header.append("  │\n", style="cyan")
     header.append("╰─────────────────────────────────────────────────────────────╯", style="cyan")
     console.print(header)
+    console.print("[dim]This tool modifies code using AI. Use at your own risk. Always back up first.[/]")
     console.print()
 
 

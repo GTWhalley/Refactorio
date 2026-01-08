@@ -134,6 +134,26 @@ class DashboardView(ctk.CTkFrame):
         )
         subtitle.pack(anchor="w", pady=(4, 0))
 
+        # Disclaimer banner
+        disclaimer_banner = ctk.CTkFrame(
+            scroll,
+            fg_color="#2a2a3a",
+            corner_radius=theme.dimensions.card_radius,
+        )
+        disclaimer_banner.pack(fill="x", pady=(0, 16))
+
+        disclaimer_content = ctk.CTkFrame(disclaimer_banner, fg_color="transparent")
+        disclaimer_content.pack(fill="x", padx=16, pady=10)
+
+        disclaimer_text = ctk.CTkLabel(
+            disclaimer_content,
+            text="This tool modifies code using AI-generated patches. Use at your own risk. Always back up your code before running.",
+            font=(theme.fonts.family, theme.fonts.size_sm),
+            text_color=theme.colors.text_secondary,
+            wraplength=800,
+        )
+        disclaimer_text.pack(anchor="w")
+
         # Connection status banner
         self.status_banner = ctk.CTkFrame(
             scroll,
