@@ -1,0 +1,87 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "PlannerResponse",
+  "description": "Response from the Planner Agent containing refactoring batches",
+  "type": "object",
+  "properties": {
+    "batches": {
+      "type": "array",
+      "description": "List of atomic refactoring batches",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Unique identifier for the batch (e.g., 'batch-001')"
+          },
+          "goal": {
+            "type": "string",
+            "description": "Clear, specific goal of this batch"
+          },
+          "scope_globs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Glob patterns for files in scope"
+          },
+          "allowed_operations": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "format",
+                "remove_unused_imports",
+                "remove_dead_code",
+                "rename",
+                "extract_function",
+                "extract_class",
+                "move_module",
+                "split_module",
+                "add_types",
+                "add_tests",
+                "refactor_internal",
+                "async_conversion",
+                "architecture"
+              ]
+            },
+            "description": "Types of operations allowed in this batch"
+          },
+          "diff_budget_loc": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 1000,
+            "description": "Maximum lines of code to change"
+          },
+          "risk_score": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 100,
+            "description": "Risk score (0=safe, 100=very risky)"
+          },
+          "verifier_level": {
+            "type": "string",
+            "enum": ["fast", "full"],
+            "description": "Verification level required after this batch"
+          },
+          "notes": {
+            "type": "string",
+            "description": "Additional notes or context"
+          }
+        },
+        "required": [
+          "id",
+          "goal",
+          "scope_globs",
+          "allowed_operations",
+          "diff_budget_loc",
+          "risk_score",
+          "verifier_level"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["batches"],
+  "additionalProperties": false
+}

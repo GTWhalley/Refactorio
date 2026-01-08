@@ -1,0 +1,27 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "CriticResponse",
+  "description": "Response from the Critic Agent reviewing a patch",
+  "type": "object",
+  "properties": {
+    "decision": {
+      "type": "string",
+      "enum": ["accept", "reject", "shrink_scope", "shrink_diff", "noop"],
+      "description": "The review decision"
+    },
+    "reasons": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Reasons for the decision"
+    },
+    "suggested_constraints": {
+      "type": "object",
+      "description": "Suggested constraints if changes are needed",
+      "additionalProperties": true
+    }
+  },
+  "required": ["decision", "reasons"],
+  "additionalProperties": false
+}

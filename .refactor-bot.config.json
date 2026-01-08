@@ -1,0 +1,38 @@
+{
+  "diff_budget_loc": 300,
+  "max_batches": 200,
+  "retry_per_batch": 2,
+  "run_full_verifier_every": 5,
+  "build_command": null,
+  "fast_verifier": [
+    "npm test"
+  ],
+  "full_verifier": [
+    "npm test",
+    "npm run typecheck"
+  ],
+  "lint_command": null,
+  "typecheck_command": null,
+  "scope_excludes": [
+    "**/dist/**",
+    "**/build/**",
+    "**/.venv/**",
+    "**/node_modules/**",
+    "**/__pycache__/**",
+    "**/.git/**"
+  ],
+  "scope_includes": [],
+  "allow_public_api_changes": false,
+  "allow_lockfile_changes": false,
+  "allow_formatting_only": true,
+  "claude": {
+    "binary": "claude",
+    "allowed_tools": "Read,Edit,Bash,Grep,Glob",
+    "tools": "Read,Edit,Bash,Grep,Glob",
+    "max_turns_patcher": 10,
+    "max_turns_planner": 6
+  },
+  "max_prompt_chars": 40000,
+  "max_file_excerpt_lines": 600,
+  "max_ledger_entries": 10
+}
