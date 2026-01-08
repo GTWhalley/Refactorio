@@ -147,6 +147,10 @@ refactor_bot/
     └── components/     # Reusable UI components
 ```
 
+## Development
+
+This project was developed with assistance from [Claude Code](https://claude.ai/code), Anthropic's AI coding assistant. The architecture, implementation, and iterative debugging were done collaboratively between the author and Claude Code over multiple sessions.
+
 ## License
 
 MIT
